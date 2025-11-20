@@ -8,3 +8,5 @@ può consentire cache poisoning, session hijacking, bypass di filtri e altro. Po
 un ampio set di lab (topic avanzato) per comprendere CL.TE vs TE.CL,
 chunking/Content-Length inconsistencies e come costruire request smuggled. Competenze:
 formattazione raw HTTP, timing, diagnosi parsing differences, mitigazioni a livello proxy
+
+👉 [Presentazione completa su Canva](https://www.canva.com/design/DAG5P7-Cd44/EcAW_lym0FiwCvJI5yXKYg/edit?utm_content=DAG5P7-Cd44&utm_campaign=designshare&utm_medium=link2&utm_source=sharebutton)
