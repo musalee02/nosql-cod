@@ -33,7 +33,7 @@ def print_success(msg):
 def print_info(msg):
     print(colored(msg, Fore.CYAN))
 
-LAB_ID = "YOUR_LAB_ID_HERE"  
+LAB_ID = "INSERT_YOUR_LAB_ID_HERE"  
 BASE_URL = f"https://{LAB_ID}.web-security-academy.net"
 
 class NoSQLInjectionExploit:
@@ -116,7 +116,7 @@ class NoSQLInjectionExploit:
     
     def explore_vulnerability(self):
         print("\n" + "="*60)
-        print("ESPLORAZIONE VULNERABILITÀ (Educational)")
+        print("ESPLORAZIONE VULNERABILITÀ")
         print("="*60)
 
         print("\nSTEP 1 - Test: Bypass senza conoscere lo username")
