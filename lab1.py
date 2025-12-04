@@ -149,7 +149,7 @@ def main():
     if not BaseNoSQLExploit.validate_lab_id(LAB_ID):
         sys.exit(1)
     
-    exploit = NoSQLInjectionExploit(LAB_ID)
+    exploit = OperatorInjToBypassAuthentication(LAB_ID)
     
     # Verifica connettività
     if not exploit.check_lab_status():
