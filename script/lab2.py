@@ -30,7 +30,7 @@ def print_success(msg):
 def print_info(msg):
     print(colored(msg, Fore.CYAN))
 
-LAB_ID = "INSERT_YOUR_LAB_ID_HERE"  
+LAB_ID = "0a9e00c504c25bd2804b175000f10064"  
 BASE_URL = f"https://{LAB_ID}.web-security-academy.net"
 
 class NoSQLInjectionExploit:
